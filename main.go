@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"sync"
 )
 
 var (
@@ -14,20 +15,34 @@ var (
 	ErrInternalServerError = errors.New("internal server error")
 )
 
-var store = make(map[string]string)
+type Store struct {
+	sync.RWMutex
+	m map[string]string
+}
 
-func Put(key, value string) (err error) {
+func NewStore() *Store {
+	return &Store{
+		m: make(map[string]string),
+	}
+}
+
+func (s *Store) Put(key, value string) (err error) {
 	slog.Info("putting key to store", slog.String("key", key))
 
-	store[key] = value
+	s.Lock()
+	s.m[key] = value
+	s.Unlock()
 
 	return nil
 }
 
-func Get(key string) (value string, err error) {
+func (s *Store) Get(key string) (value string, err error) {
 	slog.Info("getting value using key", slog.String("key", key))
 
-	value, exists := store[key]
+	s.RLock()
+	value, exists := s.m[key]
+	s.RUnlock()
+
 	if !exists {
 		return "", ErrNoSuchKey
 	}
@@ -35,13 +50,17 @@ func Get(key string) (value string, err error) {
 	return value, nil
 }
 
-func Delete(key string) (err error) {
+func (s *Store) Delete(key string) (err error) {
 	slog.Info("deleting key from store", slog.String("key", key))
 
-	delete(store, key)
+	s.Lock()
+	delete(s.m, key)
+	s.Unlock()
 
 	return nil
 }
+
+var store = NewStore()
 
 func PutHandler(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
@@ -54,7 +73,7 @@ func PutHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err = Put(key, string(value)); err != nil {
+	if err = store.Put(key, string(value)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -65,7 +84,7 @@ func PutHandler(w http.ResponseWriter, r *http.Request) {
 func GetHandler(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 
-	value, err := Get(key)
+	value, err := store.Get(key)
 	if errors.Is(err, ErrNoSuchKey) {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -81,7 +100,7 @@ func GetHandler(w http.ResponseWriter, r *http.Request) {
 func DeleteHandler(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 
-	err := Delete(key)
+	err := store.Delete(key)
 	if err != nil {
 		http.Error(w, ErrInternalServerError.Error(), http.StatusInternalServerError)
 		return
