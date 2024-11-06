@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"log/slog"
@@ -13,7 +14,37 @@ var (
 	ErrInternalServerError = errors.New("internal server error")
 )
 
-var store = NewStore()
+var transact TransactionLogger
+var store *Store
+
+func InitializeTransactionLog() (err error) {
+	slog.Info("initializing transaction log")
+
+	transact, err = NewFileTransactionLogger("transaction.log")
+	if err != nil {
+		return fmt.Errorf("failed to create transaction logger: %w", err)
+	}
+
+	events, errors := transact.ReadEvents()
+	event, channelOpen := Event{}, true
+
+	for channelOpen && err == nil {
+		select {
+		case err, channelOpen = <-errors:
+		case event, channelOpen = <-events:
+			switch event.Type {
+			case EventTypePut:
+				err = store.Put(event.Key, event.Value)
+			case EventTypeDelete:
+				err = store.Delete(event.Key)
+			}
+		}
+	}
+
+	transact.Run()
+
+	return err
+}
 
 func PutHandler(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
@@ -30,6 +61,8 @@ func PutHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	transact.WritePut(key, string(value))
 
 	w.WriteHeader(http.StatusCreated)
 }
@@ -59,6 +92,8 @@ func DeleteHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	transact.WriteDelete(key)
+
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -73,6 +108,11 @@ func main() {
 	logHandler := slog.NewJSONHandler(os.Stdout, logOpts)
 	logger := slog.New(logHandler)
 	slog.SetDefault(logger)
+
+	store = NewStore()
+	if err := InitializeTransactionLog(); err != nil {
+		log.Fatal(err)
+	}
 
 	slog.Info("Starting up Cavee")
 
