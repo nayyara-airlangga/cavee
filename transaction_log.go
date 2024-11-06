@@ -52,7 +52,7 @@ func (l *FileTransactionLogger) WritePut(key, value string) {
 }
 
 func (l *FileTransactionLogger) WriteDelete(key string) {
-	l.events <- Event{Type: EventTypeDelete, Key: key, Value: "-"}
+	l.events <- Event{Type: EventTypeDelete, Key: key}
 }
 
 func (l *FileTransactionLogger) Err() <-chan error {
@@ -70,7 +70,7 @@ func (l *FileTransactionLogger) Run() {
 		for e := range events {
 			l.lastSequence++
 
-			if _, err := fmt.Fprintf(l.file, "%d\t%d\t%s\t%s\n", l.lastSequence, e.Type, e.Key, e.Value); err != nil {
+			if _, err := fmt.Fprintf(l.file, "%d\t%d\t%s\t\"%s\"\n", l.lastSequence, e.Type, e.Key, e.Value); err != nil {
 				errors <- err
 				return
 			}
@@ -97,6 +97,9 @@ func (l *FileTransactionLogger) ReadEvents() (eventsCh <-chan Event, errorsCh <-
 				outErrors <- fmt.Errorf("transaction log line parse error: %w", err)
 				return
 			}
+
+			// Remove quotes from parsing
+			e.Value = e.Value[1 : len(e.Value)-1]
 
 			if l.lastSequence >= e.Sequence {
 				outErrors <- fmt.Errorf("transaction number ouf of sequence")
